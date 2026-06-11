@@ -1,4 +1,4 @@
-# `onchain` — Pixium Smart Contracts
+# Pixium Smart Contracts
 
 Soroban smart contracts powering the Pixium collaborative pixel canvas on the Stellar network.
 
