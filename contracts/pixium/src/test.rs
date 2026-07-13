@@ -1,7 +1,11 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::{Address as _, Ledger};
+
+fn set_timestamp(env: &Env, ts: u64) {
+    env.ledger().with_mut(|li| li.timestamp = ts);
+}
 
 #[test]
 fn get_pixel_returns_none_for_unpainted_cell() {
@@ -13,33 +17,35 @@ fn get_pixel_returns_none_for_unpainted_cell() {
 }
 
 #[test]
-fn set_pixel_then_get_pixel_round_trips() {
+fn place_pixel_then_get_pixel_round_trips() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
-    let owner = Address::generate(&env);
+    let player = Address::generate(&env);
 
-    client.set_pixel(&5, &10, &3, &owner);
+    client.place_pixel(&player, &5, &10, &3);
 
     let pixel = client.get_pixel(&5, &10).unwrap();
     assert_eq!(pixel.color, 3);
-    assert_eq!(pixel.owner, owner);
+    assert_eq!(pixel.owner, player);
 }
 
 #[test]
-fn set_pixel_overwrites_previous_value() {
+fn place_pixel_by_different_player_overwrites_previous_value() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
-    let first_owner = Address::generate(&env);
-    let second_owner = Address::generate(&env);
+    let first_player = Address::generate(&env);
+    let second_player = Address::generate(&env);
 
-    client.set_pixel(&0, &0, &1, &first_owner);
-    client.set_pixel(&0, &0, &2, &second_owner);
+    client.place_pixel(&first_player, &0, &0, &1);
+    client.place_pixel(&second_player, &0, &0, &2);
 
     let pixel = client.get_pixel(&0, &0).unwrap();
     assert_eq!(pixel.color, 2);
-    assert_eq!(pixel.owner, second_owner);
+    assert_eq!(pixel.owner, second_player);
 }
 
 #[test]
@@ -54,11 +60,78 @@ fn get_pixel_rejects_out_of_bounds_x() {
 
 #[test]
 #[should_panic(expected = "pixel coordinates out of bounds")]
-fn set_pixel_rejects_out_of_bounds_y() {
+fn place_pixel_rejects_out_of_bounds_y() {
     let env = Env::default();
+    env.mock_all_auths();
     let contract_id = env.register(Contract, ());
     let client = ContractClient::new(&env, &contract_id);
-    let owner = Address::generate(&env);
+    let player = Address::generate(&env);
 
-    client.set_pixel(&0, &CANVAS_HEIGHT, &1, &owner);
+    client.place_pixel(&player, &0, &CANVAS_HEIGHT, &1);
+}
+
+#[test]
+#[should_panic(expected = "color is not in the palette")]
+fn place_pixel_rejects_color_outside_palette() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+    let player = Address::generate(&env);
+
+    client.place_pixel(&player, &0, &0, &PALETTE_SIZE);
+}
+
+#[test]
+#[should_panic(expected = "cooldown has not elapsed")]
+fn place_pixel_enforces_cooldown_for_same_player() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+    let player = Address::generate(&env);
+
+    set_timestamp(&env, 1_000);
+    client.place_pixel(&player, &0, &0, &1);
+
+    set_timestamp(&env, 1_000 + COOLDOWN_SECONDS - 1);
+    client.place_pixel(&player, &1, &1, &2);
+}
+
+#[test]
+fn place_pixel_allows_placement_after_cooldown_elapses() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+    let player = Address::generate(&env);
+
+    set_timestamp(&env, 1_000);
+    client.place_pixel(&player, &0, &0, &1);
+
+    set_timestamp(&env, 1_000 + COOLDOWN_SECONDS);
+    client.place_pixel(&player, &1, &1, &2);
+
+    let pixel = client.get_pixel(&1, &1).unwrap();
+    assert_eq!(pixel.color, 2);
+    assert_eq!(pixel.owner, player);
+}
+
+#[test]
+fn place_pixel_cooldown_is_tracked_per_player() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+    let first_player = Address::generate(&env);
+    let second_player = Address::generate(&env);
+
+    set_timestamp(&env, 1_000);
+    client.place_pixel(&first_player, &0, &0, &1);
+    // A different player is unaffected by first_player's cooldown.
+    client.place_pixel(&second_player, &1, &1, &2);
+
+    let pixel = client.get_pixel(&1, &1).unwrap();
+    assert_eq!(pixel.color, 2);
+    assert_eq!(pixel.owner, second_player);
 }
